@@ -1,0 +1,145 @@
+name: realtime-chat
+
+services:
+  nginx_load_balancer:
+    image: nginx:latest
+    ports:
+      - "5001:80"
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - websocket_server_1
+      - websocket_server_2
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+  websocket_server_1:
+    build: websocket_server
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - relational_database
+      - redis
+    environment:
+      KAFKA_BROKER: kafka-1:9092
+      PUBLIC_KEY_PATH: "/code/app/keys/public_key.pem"
+      ALGORITHM: "RS256"
+      SERVER_URL: "websocket_server_1:80"
+    volumes:
+      - ./auxiliar/keys:/code/app/keys:ro
+
+  websocket_server_2:
+    build: websocket_server
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - relational_database
+      - redis
+    environment:
+      KAFKA_BROKER: kafka-1:9092
+      PUBLIC_KEY_PATH: "/code/app/keys/public_key.pem"
+      ALGORITHM: "RS256"
+      SERVER_URL: "websocket_server_2:80"
+    volumes:
+      - ./auxiliar/keys:/code/app/keys:ro
+
+  login_server:
+    build: login_server
+    ports:
+      - "5002:80"
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - relational_database
+    environment:
+      PRIVATE_KEY_PATH: "/code/app/keys/private_key.pem"
+      PUBLIC_KEY_PATH: "/code/app/keys/public_key.pem"
+      ALGORITHM: "RS256"
+      DATABASE_URL: "postgresql://root:password@relational_database:5432/chatdb"
+    volumes:
+      - ./auxiliar/keys:/code/app/keys
+
+  message_consumer:
+    build: message_consumer
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - relational_database
+      - redis
+    environment:
+      DATABASE_URL: "postgresql://root:password@relational_database:5432/chatdb"
+      MONGO_URL: "mongodb://root:password@mongodb:27017/"
+
+  channel_manager:
+    build: channel_manager
+    ports:
+      - "5005:80"
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - relational_database
+    environment:
+      DATABASE_URL: "postgresql://root:password@relational_database:5432/chatdb"
+      MONGODB_URL: "mongodb://root:password@mongodb:27017/"
+
+  web_client:
+    build: web_client
+    ports:
+      - "5004:80"
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    depends_on:
+      - login_server
+      - nginx_load_balancer
+    env_file:
+      - .env
+    environment:
+      LOGIN_SERVER_URL: "http://login_server"
+      WEBSOCKET_CLIENT_URL: "ws://localhost:5001/ws"
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-dev-session-secret}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5004/auth/google/callback}
+  
+  relational_database:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: chatdb
+    volumes:
+      - ./databases/relational_database/init:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - kafka-cluster_kafka-cluster-network
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    command: redis-server --save "" --appendonly no # Disable persistence
+    networks:
+      - kafka-cluster_kafka-cluster-network
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    networks:
+      - kafka-cluster_kafka-cluster-network
+    volumes:
+      - ./databases/mongodb/init:/docker-entrypoint-initdb.d
+      - mongodb_data:/data/db
+  
+networks:
+  kafka-cluster_kafka-cluster-network:
+    external: true
+
+volumes:
+  postgres_data:
+  mongodb_data:

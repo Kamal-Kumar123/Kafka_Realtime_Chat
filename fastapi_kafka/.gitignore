@@ -1,0 +1,5 @@
+# Local env and data (see root .gitignore)
+.env
+.env.*
+!.env.example
+/data
