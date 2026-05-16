@@ -5,6 +5,7 @@
 #  Created by Xavier Cañadas on 15/4/2025
 #  Copyright (c) 2025. All rights reserved.
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Annotated
 import json
@@ -19,13 +20,13 @@ from fastapi import (
     WebSocketException,
     status,
 )
-from contextlib import asynccontextmanager
-from confluent_kafka import Producer, Consumer, KafkaError
+from confluent_kafka import Producer
 from .jwt_auth import oauth2_scheme, get_username_from_token
 from .redis_client import get_redis_client
 from .models import Message, MessageRequest, Request
 from .channel_requests import send_channel_request
 from .kafka_config import build_kafka_config
+from . import kafka_consumer
 
 SERVER_URL = os.getenv("SERVER_URL", "websocket_server_1:80")
 
@@ -49,21 +50,6 @@ Message sent by the client
 """
 # todo: in the future maybe would need to create a Request class, to allow different tipes of requests: message, history of a channel…
 # for now, the only requests the client will send are messages.
-
-
-
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # startup
-
-    yield
-    # shutdown
-    producer.flush()  # before shutdown, the producer needs to send the pending messages
-
-
-app = FastAPI()
 
 
 class ConnectionManager:
@@ -102,6 +88,31 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+async def deliver_message_to_user(
+    message: Message, username: str, websocket_server_url: str | None
+):
+    """In-process delivery on this instance; HTTP fallback for other hosts."""
+    if username == message.username:
+        return
+    if username in manager.active_connections:
+        await manager.active_connections[username].send_text(message.model_dump_json())
+        return
+    if websocket_server_url:
+        await kafka_consumer.send_message_http(message, username, websocket_server_url)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    kafka_consumer.start_kafka_consumer(deliver_message_to_user, loop)
+    yield
+    kafka_consumer.stop_kafka_consumer()
+    producer.flush()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 async def send_message_to_server(message_str: str, websocket: WebSocket):

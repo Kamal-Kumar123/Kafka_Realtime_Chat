@@ -4,7 +4,9 @@ confluent_kafka>=2.3.0,<3.0.0
 requests==2.32.3
 websockets
 sqlmodel
+psycopg2-binary
 pyjwt[crypto]
 passlib[bcrypt]
 redis
 aiohttp
+pymongo
