@@ -17,26 +17,21 @@ from sqlmodel.sql._expression_select_cls import _T
 from sqlalchemy import Select
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
-import redis
-
-
 from .models import Message, MessageRequest, UserChannels
+from .redis_client import get_redis_client
+from .kafka_config import build_kafka_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Consumer configuration
-KAFKA_BROKER = os.environ.get("KAFKA_BROKER", "kafka-1:9092")
-
-MESSAGE_CONSUMER_CONFIG = {
-    "bootstrap.servers": KAFKA_BROKER,
-    "group.id": "websocket-message-producer",
-    "auto.offset.reset": "latest",  # during restarts, only read messages that haven't been processed.
-}
+MESSAGE_CONSUMER_CONFIG = build_kafka_config(
+    group_id="websocket-message-producer",
+)
 
 # Redis configuration
-redis_instance = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
+redis_instance = get_redis_client()
 
 
 # Database configuration
@@ -124,9 +119,15 @@ async def send_message(message: Message, username: str, websocket_server_url: st
     header = {"Content-Type": "application/json"}
     data = message_request.model_dump()
 
+    scheme = os.getenv("WEBSOCKET_MESSAGE_SCHEME", "http")
+    if websocket_server_url.startswith("http://") or websocket_server_url.startswith("https://"):
+        base = websocket_server_url.rstrip("/")
+        url = f"{base}/message"
+    else:
+        url = f"{scheme}://{websocket_server_url}/message"
+
     async with aiohttp.ClientSession() as session:
         try:
-            url = f"http://{websocket_server_url}/message"
             async with session.post(url, json=data, headers=header) as response:
                 response.raise_for_status()
 

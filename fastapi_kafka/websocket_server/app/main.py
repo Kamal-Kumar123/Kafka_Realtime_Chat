@@ -21,25 +21,21 @@ from fastapi import (
 )
 from contextlib import asynccontextmanager
 from confluent_kafka import Producer, Consumer, KafkaError
-import redis
-
 from .jwt_auth import oauth2_scheme, get_username_from_token
+from .redis_client import get_redis_client
 from .models import Message, MessageRequest, Request
 from .channel_requests import send_channel_request
+from .kafka_config import build_kafka_config
 
 SERVER_URL = os.getenv("SERVER_URL", "websocket_server_1:80")
 
 # Kafka configuration
 TOPIC = "messages"
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka-1:9092")
-PRODUCER_CONFIG = {
-    "bootstrap.servers": KAFKA_BROKER,
-    "client.id": "websocket-message-producer",
-}
+PRODUCER_CONFIG = build_kafka_config(client_id="websocket-message-producer")
 producer = Producer(PRODUCER_CONFIG)
 
 # Redis configuration
-redis_instance = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
+redis_instance = get_redis_client()
 
 """
 Message sent by the client

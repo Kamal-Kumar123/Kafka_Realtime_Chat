@@ -5,6 +5,7 @@
 #  Created by Xavier Cañadas on 28/4/2025
 #  Copyright (c) 2025. All rights reserved.
 import json
+import os
 import aiohttp
 from fastapi import WebSocket
 
@@ -13,7 +14,11 @@ from .models import ChannelRequest
 
 # todo: now the function has a lot of repetitive code. Handle it!
 async def send_channel_request(request_str: str, username: str, websocket: WebSocket):
-    channel_server_url = "http://channel_manager:80/channels/"
+    channel_server_url = os.getenv(
+        "CHANNEL_MANAGER_URL", "http://channel_manager:80/channels/"
+    )
+    if not channel_server_url.endswith("/"):
+        channel_server_url += "/"
 
     try:
         data = json.loads(request_str)
