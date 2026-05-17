@@ -253,6 +253,58 @@ def health():
     return {"status": "ok", "service": "web_client"}
 
 
+@app.get("/api/status")
+def api_status():
+    """
+    Debug Render config: open https://YOUR-web-client.onrender.com/api/status
+    """
+    login_health_url = _login_server_url("/health")
+    result: dict[str, Any] = {
+        "web_client": "ok",
+        "login_server_url_configured": LOGIN_SERVER_URL,
+        "login_server_health_url": login_health_url,
+        "channel_manager_url": CHANNEL_MANAGER_URL or "(not set)",
+        "warmup_websocket_url": WARMUP_WEBSOCKET_URL or "(not set)",
+        "login_server": None,
+        "hints": [],
+    }
+
+    if "login_server" in LOGIN_SERVER_URL and "onrender.com" not in LOGIN_SERVER_URL:
+        result["hints"].append(
+            "LOGIN_SERVER_URL still looks like Docker default (http://login_server). "
+            "Set it to your public Render URL, e.g. https://realtimechat-login-server.onrender.com"
+        )
+
+    try:
+        response = requests.get(login_health_url, timeout=20)
+        result["login_server"] = {
+            "http_status": response.status_code,
+            "body": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text[:500],
+        }
+        if response.status_code == 404:
+            result["hints"].append(
+                "login_server returned 404 — wrong URL or old deploy without /health. "
+                "Copy the exact URL from Render dashboard → login_server service."
+            )
+        elif response.status_code in (502, 503, 504):
+            result["hints"].append(
+                "login_server is sleeping or crashed (free tier). Wait 60s, refresh this page, or use UptimeRobot."
+            )
+        elif response.status_code == 200:
+            body = result["login_server"].get("body") or {}
+            if isinstance(body, dict) and not body.get("jwt_keys"):
+                result["hints"].append(
+                    "Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY on login_server in Render (paste full PEM files)."
+                )
+            if isinstance(body, dict) and not body.get("database"):
+                result["hints"].append("Set DATABASE_URL on login_server to your Render Postgres internal URL.")
+    except requests.RequestException as error:
+        result["login_server"] = {"error": str(error)}
+        result["hints"].append("Cannot reach login_server — check LOGIN_SERVER_URL and that the service is Live on Render.")
+
+    return result
+
+
 @app.get("/api/warmup")
 def api_warmup():
     """
@@ -422,6 +474,8 @@ async def google_callback(request: Request):
             login_response.status_code = 400
             return login_response
 
+        _wake_login_server()
+
         try:
             response = _request_login_server(
                 "POST",
@@ -447,9 +501,9 @@ async def google_callback(request: Request):
             fallback = "Google authentication failed"
             if response.status_code in (502, 503, 504):
                 fallback = (
-                    "Login server was unavailable (may be waking up on Render free tier). "
-                    "Wait 30 seconds and try Google sign-in again. "
-                    "If it keeps failing: check login_server logs, DATABASE_URL, and JWT_PRIVATE_KEY."
+                    f"Login server unavailable ({response.status_code}) at {LOGIN_SERVER_URL}. "
+                    f"Open /api/status on this site to diagnose. "
+                    f"On Render: confirm login_server is Live, set DATABASE_URL + JWT_PRIVATE_KEY, redeploy."
                 )
             elif response.status_code == 503:
                 fallback = (
