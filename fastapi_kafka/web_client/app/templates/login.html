@@ -10,11 +10,6 @@
                 <h2 class="text-center">Login</h2>
             </div>
             <div class="card-body">
-                <div id="warmup-banner" class="alert alert-info text-center mb-3">
-                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                    <span class="warmup-text">Waking all backend services (login, channels, chat)…</span>
-                </div>
-
                 {% if error_message %}
                 <div class="alert alert-danger">
                     {{ error_message }}
@@ -26,21 +21,21 @@
                 </div>
                 {% endif %}
 
-                <form id="login-form" action="/login" method="post">
+                <form action="/login" method="post">
                     <div class="mb-3">
                         <label for="email" class="form-label">Email or username</label>
-                        <input type="text" class="form-control" id="email" name="email" required disabled>
+                        <input type="text" class="form-control" id="email" name="email" required>
                     </div>
                     <div class="mb-3">
                         <label for="password" class="form-label">Password</label>
-                        <input type="password" class="form-control" id="password" name="password" required disabled>
+                        <input type="password" class="form-control" id="password" name="password" required>
                     </div>
                     <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary" id="login-submit" disabled>Login</button>
+                        <button type="submit" class="btn btn-primary">Login</button>
                     </div>
                 </form>
                 <div class="d-grid gap-2 mt-3">
-                    <a class="btn btn-outline-dark disabled" id="google-login-btn" href="/auth/google/login" aria-disabled="true">
+                    <a class="btn btn-outline-dark {% if not google_enabled %}disabled{% endif %}" href="/auth/google/login">
                         Continue with Google
                     </a>
                 </div>
@@ -49,7 +44,6 @@
                     Google login needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
                 </p>
                 {% endif %}
-                <div id="warmup-warning" class="alert alert-warning mt-3 d-none small mb-0"></div>
                 <div class="mt-3 text-center">
                     <a href="/register">Create an account</a>
                 </div>
@@ -64,28 +58,4 @@
         </div>
     </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script src="/static/js/service-warmup.js"></script>
-<script>
-    function enableLoginForm() {
-        document.querySelectorAll('#login-form input, #login-submit').forEach((el) => {
-            el.disabled = false;
-        });
-        const googleBtn = document.getElementById('google-login-btn');
-        if (googleBtn) {
-            googleBtn.classList.remove('disabled');
-            googleBtn.removeAttribute('aria-disabled');
-        }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-        runServiceWarmup({
-            bannerId: 'warmup-banner',
-            warningId: 'warmup-warning',
-            onReady: enableLoginForm,
-        });
-    });
-</script>
 {% endblock %}

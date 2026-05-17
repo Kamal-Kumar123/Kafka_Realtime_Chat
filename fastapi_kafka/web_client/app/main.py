@@ -6,21 +6,11 @@
 #  Copyright (c) 2025. All rights reserved.
 
 import json
-import time
 import uuid
-from typing import Annotated, Any, Optional, Dict
+from typing import Annotated, Optional, Dict
 import os
 
 import requests
-from service_warmup import (
-    CHANNEL_MANAGER_URL,
-    LOGIN_SERVER_URL,
-    WARMUP_WEBSOCKET_URL,
-    _login_server_url,
-    start_background_warmup,
-    warmup_status_response,
-    wake_service,
-)
 from fastapi import FastAPI, Request, Form, Cookie, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,7 +20,8 @@ from authlib.integrations.starlette_client import OAuth, OAuthError
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-# Configuration (LOGIN_SERVER_URL also defined in service_warmup)
+# Configuration
+LOGIN_SERVER_URL = os.getenv("LOGIN_SERVER_URL", "http://login_server")
 WEBSOCKET_CLIENT_URL = os.getenv(
     "WEBSOCKET_CLIENT_URL", "ws://localhost:5001/ws"
 )  # The URL clients use to connect
@@ -125,41 +116,6 @@ def create_session_response(username: str, token: str, redirect_url: str = "/cha
     return response
 
 
-def _wake_login_server() -> None:
-    wake_service("login_server", _login_server_url("/health"))
-
-
-def _request_login_server(method: str, path: str, **kwargs: Any) -> requests.Response:
-    """
-    Call login_server with retries for transient 502/503 (cold start on Render).
-    """
-    url = _login_server_url(path)
-    retries = int(os.getenv("LOGIN_SERVER_RETRIES", "4"))
-    wait_seconds = float(os.getenv("LOGIN_SERVER_RETRY_SECONDS", "3"))
-    timeout = int(os.getenv("LOGIN_SERVER_TIMEOUT", "30"))
-    kwargs.setdefault("timeout", timeout)
-
-    last_response: requests.Response | None = None
-    last_error: requests.RequestException | None = None
-
-    for attempt in range(retries):
-        try:
-            response = requests.request(method, url, **kwargs)
-            last_response = response
-            if response.status_code not in (502, 503, 504):
-                return response
-        except requests.RequestException as error:
-            last_error = error
-
-        if attempt < retries - 1:
-            time.sleep(wait_seconds * (attempt + 1))
-
-    if last_response is not None:
-        return last_response
-    assert last_error is not None
-    raise last_error
-
-
 def get_error_message(response: requests.Response, fallback: str) -> str:
     try:
         detail = response.json().get("detail")
@@ -184,80 +140,12 @@ def get_current_user(session_id: Annotated[Optional[str], Cookie()] = None):
     return active_sessions[session_id]
 
 
-@app.get("/health")
-def health():
-    """Fast ping for UptimeRobot — does not wake other services."""
-    return {"status": "ok", "service": "web_client"}
-
-
-@app.get("/api/status")
-def api_status():
-    """
-    Debug Render config: open https://YOUR-web-client.onrender.com/api/status
-    """
-    login_health_url = _login_server_url("/health")
-    result: dict[str, Any] = {
-        "web_client": "ok",
-        "login_server_url_configured": LOGIN_SERVER_URL,
-        "login_server_health_url": login_health_url,
-        "channel_manager_url": CHANNEL_MANAGER_URL or "(not set)",
-        "warmup_websocket_url": WARMUP_WEBSOCKET_URL or "(not set)",
-        "login_server": None,
-        "hints": [],
-    }
-
-    if "login_server" in LOGIN_SERVER_URL and "onrender.com" not in LOGIN_SERVER_URL:
-        result["hints"].append(
-            "LOGIN_SERVER_URL still looks like Docker default (http://login_server). "
-            "Set it to your public Render URL, e.g. https://realtimechat-login-server.onrender.com"
-        )
-
-    try:
-        response = requests.get(login_health_url, timeout=20)
-        result["login_server"] = {
-            "http_status": response.status_code,
-            "body": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text[:500],
-        }
-        if response.status_code == 404:
-            result["hints"].append(
-                "login_server returned 404 — wrong URL or old deploy without /health. "
-                "Copy the exact URL from Render dashboard → login_server service."
-            )
-        elif response.status_code in (502, 503, 504):
-            result["hints"].append(
-                "login_server is sleeping or crashed (free tier). Wait 60s, refresh this page, or use UptimeRobot."
-            )
-        elif response.status_code == 200:
-            body = result["login_server"].get("body") or {}
-            if isinstance(body, dict) and not body.get("jwt_keys"):
-                result["hints"].append(
-                    "Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY on login_server in Render (paste full PEM files)."
-                )
-            if isinstance(body, dict) and not body.get("database"):
-                result["hints"].append("Set DATABASE_URL on login_server to your Render Postgres internal URL.")
-    except requests.RequestException as error:
-        result["login_server"] = {"error": str(error)}
-        result["hints"].append("Cannot reach login_server — check LOGIN_SERVER_URL and that the service is Live on Render.")
-
-    return result
-
-
-@app.get("/api/warmup")
-def api_warmup():
-    """
-    Wake all backend microservices (login, channels, websocket).
-    Called automatically from the login page; safe to open in a browser.
-    """
-    return warmup_status_response()
-
-
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request, session_id: Annotated[Optional[str], Cookie()] = None):
     """Render the login page or redirect to chat if already logged in"""
     if session_id and session_id in active_sessions:
         return RedirectResponse(url="/channels")
 
-    start_background_warmup()
     return render_login(request)
 
 
@@ -266,9 +154,8 @@ async def login(request: Request, email: Annotated[str, Form()], password: Annot
     """Handle login form submission"""
     # Call login server to authenticate user
     try:
-        response = _request_login_server(
-            "POST",
-            "/token",
+        response = requests.post(
+            f"{LOGIN_SERVER_URL}/token",
             data={"username": email, "password": password},
         )
 
@@ -304,7 +191,6 @@ async def register_page(request: Request, session_id: Annotated[Optional[str], C
     if session_id and session_id in active_sessions:
         return RedirectResponse(url="/channels")
 
-    start_background_warmup()
     return templates.TemplateResponse(
         "register.html", {"request": request, "error_message": ""}
     )
@@ -319,9 +205,8 @@ async def register(
     password: Annotated[str, Form()],
 ):
     try:
-        register_response = _request_login_server(
-            "POST",
-            "/users",
+        register_response = requests.post(
+            f"{LOGIN_SERVER_URL}/users",
             json={
                 "first_name": first_name,
                 "last_name": last_name,
@@ -341,9 +226,8 @@ async def register(
             response.status_code = 400
             return response
 
-        token_response = _request_login_server(
-            "POST",
-            "/token",
+        token_response = requests.post(
+            f"{LOGIN_SERVER_URL}/token",
             data={"username": email, "password": password},
         )
         if token_response.status_code != 200:
@@ -376,7 +260,6 @@ async def google_login(request: Request):
         return response
 
     clear_stale_oauth_session(request)
-    start_background_warmup()
     return await oauth.google.authorize_redirect(request, GOOGLE_REDIRECT_URI)
 
 
@@ -404,12 +287,9 @@ async def google_callback(request: Request):
             login_response.status_code = 400
             return login_response
 
-        _wake_login_server()
-
         try:
-            response = _request_login_server(
-                "POST",
-                "/auth/google",
+            response = requests.post(
+                f"{LOGIN_SERVER_URL}/auth/google",
                 json={
                     "email": user_info.get("email"),
                     "name": user_info.get("name"),
@@ -417,32 +297,20 @@ async def google_callback(request: Request):
                     "last_name": user_info.get("family_name"),
                     "google_sub": user_info.get("sub"),
                 },
+                timeout=30,
             )
         except requests.RequestException as e:
             login_response = render_login(
                 request,
-                f"Could not reach login server at {LOGIN_SERVER_URL}. "
-                f"On Render free tier the service may be waking up — wait 30s and try again. ({e})",
+                f"Could not reach login server at {LOGIN_SERVER_URL}. ({e})",
             )
             login_response.status_code = 502
             return login_response
 
         if response.status_code != 200:
-            fallback = "Google authentication failed"
-            if response.status_code in (502, 503, 504):
-                fallback = (
-                    f"Login server unavailable ({response.status_code}) at {LOGIN_SERVER_URL}. "
-                    f"Open /api/status on this site to diagnose. "
-                    f"On Render: confirm login_server is Live, set DATABASE_URL + JWT_PRIVATE_KEY, redeploy."
-                )
-            elif response.status_code == 503:
-                fallback = (
-                    "Login server not ready (503). Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY "
-                    "on the login_server service in Render."
-                )
             login_response = render_login(
                 request,
-                get_error_message(response, fallback),
+                get_error_message(response, "Google authentication failed"),
             )
             login_response.status_code = 401
             return login_response
