@@ -12,4 +12,4 @@ COPY ./app /code/app
 ENV PORT=10000
 EXPOSE 10000
 
-CMD ["sh", "-c", "fastapi run app/main.py --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "fastapi run app.main:app --host 0.0.0.0 --port ${PORT}"]
