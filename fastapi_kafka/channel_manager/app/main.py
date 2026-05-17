@@ -26,6 +26,18 @@ app = FastAPI(redirect_slashes=False)
 async def root():
     return {"hello_world": "Hello World!"}
 
+@app.get("/health")
+def health():
+    """Lightweight health check for UptimeRobot / Render keep-alive."""
+    db_ok = False
+    try:
+        inspector = inspect(engine)
+        db_ok = "channels" in inspector.get_table_names(schema="public")
+    except Exception:
+        pass
+    return {"status": "ok" if db_ok else "degraded", "service": "channel_manager", "database": db_ok}
+
+
 @app.get("/db-check")
 def check_db():
     inspector = inspect(engine)

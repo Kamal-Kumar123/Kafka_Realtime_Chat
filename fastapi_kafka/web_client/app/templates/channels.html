@@ -21,6 +21,11 @@
                 <span id="connection-status" class="badge bg-secondary">Disconnected</span>
             </div>
             <div class="card-body">
+                <div id="channels-warmup-banner" class="alert alert-info text-center mb-3">
+                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Connecting to chat services…
+                </div>
+                <div id="channels-warmup-warning" class="alert alert-warning d-none small mb-3"></div>
                 <div class="row mb-3">
                     <div class="col">
                         <div class="input-group">
@@ -98,6 +103,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/service-warmup.js"></script>
 <script>
     // Store important information passed from the server
     const username = "{{ username }}";
@@ -394,8 +400,14 @@
     // Initialize data attribute for search state
     searchChannelInput.dataset.searching = "false";
     
-    // Connect when page loads
-    document.addEventListener('DOMContentLoaded', connectWebSocket);
+    // Warm up backend services, then open WebSocket (Render free-tier cold start)
+    document.addEventListener('DOMContentLoaded', () => {
+        runServiceWarmup({
+            bannerId: 'channels-warmup-banner',
+            warningId: 'channels-warmup-warning',
+            onReady: connectWebSocket,
+        });
+    });
 </script>
 <style>
     .channel-list {

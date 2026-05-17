@@ -148,6 +148,11 @@ async def send_message_to_server(message_str: str, websocket: WebSocket):
 
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "websocket_server", "server_url": SERVER_URL}
+
+
 @app.get("/")
 async def root():
     return {"hello_world": "Hello World!",

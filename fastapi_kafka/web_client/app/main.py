@@ -6,8 +6,10 @@
 #  Copyright (c) 2025. All rights reserved.
 
 import json
+import time
 import uuid
-from typing import Annotated, Optional, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Annotated, Any, Optional, Dict
 import os
 
 import requests
@@ -33,6 +35,9 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI", "http://localhost:5004/auth/google/callback"
 )
 APP_CANONICAL_HOST = os.getenv("APP_CANONICAL_HOST", "localhost")
+CHANNEL_MANAGER_URL = os.getenv("CHANNEL_MANAGER_URL", "")
+WARMUP_WEBSOCKET_URL = os.getenv("WARMUP_WEBSOCKET_URL", "")
+WARMUP_MAX_SECONDS = int(os.getenv("WARMUP_MAX_SECONDS", "50"))
 
 # Initialize FastAPI
 app = FastAPI()
@@ -116,6 +121,108 @@ def create_session_response(username: str, token: str, redirect_url: str = "/cha
     return response
 
 
+def _login_server_url(path: str) -> str:
+    return f"{LOGIN_SERVER_URL.rstrip('/')}{path}"
+
+
+def _channel_manager_base_url() -> str | None:
+    raw = CHANNEL_MANAGER_URL.strip().rstrip("/")
+    if not raw:
+        return None
+    if raw.endswith("/channels"):
+        return raw[: -len("/channels")]
+    return raw
+
+
+def _warmup_targets() -> list[tuple[str, str]]:
+    """Backend URLs to ping so Render free-tier services wake before login."""
+    targets: list[tuple[str, str]] = [("login_server", _login_server_url("/health"))]
+
+    channel_base = _channel_manager_base_url()
+    if channel_base:
+        targets.append(("channel_manager", f"{channel_base}/health"))
+
+    if WARMUP_WEBSOCKET_URL.strip():
+        targets.append(
+            ("websocket_server", WARMUP_WEBSOCKET_URL.strip().rstrip("/") + "/health")
+        )
+
+    for index, url in enumerate(os.getenv("WARMUP_URLS", "").split(",")):
+        url = url.strip()
+        if url:
+            targets.append((f"extra_{index}", url))
+
+    return targets
+
+
+def _ping_service(url: str, per_try_timeout: int = 12) -> bool:
+    try:
+        response = requests.get(url, timeout=per_try_timeout)
+        return response.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def _wake_service(name: str, url: str) -> bool:
+    deadline = time.time() + WARMUP_MAX_SECONDS
+    while time.time() < deadline:
+        if _ping_service(url):
+            return True
+        time.sleep(2)
+    return False
+
+
+def _wake_all_services() -> dict[str, bool]:
+    targets = _warmup_targets()
+    if not targets:
+        return {}
+
+    results: dict[str, bool] = {}
+    with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+        futures = {
+            pool.submit(_wake_service, name, url): name for name, url in targets
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            results[name] = future.result()
+    return results
+
+
+def _wake_login_server() -> None:
+    _wake_service("login_server", _login_server_url("/health"))
+
+
+def _request_login_server(method: str, path: str, **kwargs: Any) -> requests.Response:
+    """
+    Call login_server with retries for transient 502/503 (cold start on Render).
+    """
+    url = _login_server_url(path)
+    retries = int(os.getenv("LOGIN_SERVER_RETRIES", "4"))
+    wait_seconds = float(os.getenv("LOGIN_SERVER_RETRY_SECONDS", "3"))
+    timeout = int(os.getenv("LOGIN_SERVER_TIMEOUT", "30"))
+    kwargs.setdefault("timeout", timeout)
+
+    last_response: requests.Response | None = None
+    last_error: requests.RequestException | None = None
+
+    for attempt in range(retries):
+        try:
+            response = requests.request(method, url, **kwargs)
+            last_response = response
+            if response.status_code not in (502, 503, 504):
+                return response
+        except requests.RequestException as error:
+            last_error = error
+
+        if attempt < retries - 1:
+            time.sleep(wait_seconds * (attempt + 1))
+
+    if last_response is not None:
+        return last_response
+    assert last_error is not None
+    raise last_error
+
+
 def get_error_message(response: requests.Response, fallback: str) -> str:
     try:
         detail = response.json().get("detail")
@@ -140,6 +247,30 @@ def get_current_user(session_id: Annotated[Optional[str], Cookie()] = None):
     return active_sessions[session_id]
 
 
+@app.get("/health")
+def health():
+    """Fast ping for UptimeRobot — does not wake other services."""
+    return {"status": "ok", "service": "web_client"}
+
+
+@app.get("/api/warmup")
+def api_warmup():
+    """
+    Wake sleeping Render services before login (free tier cold start).
+    The login page calls this automatically; you can also open /api/warmup in a browser.
+    """
+    services = _wake_all_services()
+    ready = all(services.values()) if services else True
+    return {
+        "ready": ready,
+        "services": services,
+        "hint": (
+            "For 24/7 availability on a resume link, use UptimeRobot to ping /health every 10 minutes "
+            "or upgrade login_server on Render."
+        ),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request, session_id: Annotated[Optional[str], Cookie()] = None):
     """Render the login page or redirect to chat if already logged in"""
@@ -154,8 +285,9 @@ async def login(request: Request, email: Annotated[str, Form()], password: Annot
     """Handle login form submission"""
     # Call login server to authenticate user
     try:
-        response = requests.post(
-            f"{LOGIN_SERVER_URL}/token",
+        response = _request_login_server(
+            "POST",
+            "/token",
             data={"username": email, "password": password},
         )
 
@@ -205,8 +337,9 @@ async def register(
     password: Annotated[str, Form()],
 ):
     try:
-        register_response = requests.post(
-            f"{LOGIN_SERVER_URL}/users",
+        register_response = _request_login_server(
+            "POST",
+            "/users",
             json={
                 "first_name": first_name,
                 "last_name": last_name,
@@ -226,8 +359,9 @@ async def register(
             response.status_code = 400
             return response
 
-        token_response = requests.post(
-            f"{LOGIN_SERVER_URL}/token",
+        token_response = _request_login_server(
+            "POST",
+            "/token",
             data={"username": email, "password": password},
         )
         if token_response.status_code != 200:
@@ -260,6 +394,7 @@ async def google_login(request: Request):
         return response
 
     clear_stale_oauth_session(request)
+    _wake_login_server()
     return await oauth.google.authorize_redirect(request, GOOGLE_REDIRECT_URI)
 
 
@@ -288,8 +423,9 @@ async def google_callback(request: Request):
             return login_response
 
         try:
-            response = requests.post(
-                f"{LOGIN_SERVER_URL}/auth/google",
+            response = _request_login_server(
+                "POST",
+                "/auth/google",
                 json={
                     "email": user_info.get("email"),
                     "name": user_info.get("name"),
@@ -297,22 +433,23 @@ async def google_callback(request: Request):
                     "last_name": user_info.get("family_name"),
                     "google_sub": user_info.get("sub"),
                 },
-                timeout=15,
             )
         except requests.RequestException as e:
             login_response = render_login(
                 request,
-                f"Could not reach login server at {LOGIN_SERVER_URL}. Check LOGIN_SERVER_URL on Render. ({e})",
+                f"Could not reach login server at {LOGIN_SERVER_URL}. "
+                f"On Render free tier the service may be waking up — wait 30s and try again. ({e})",
             )
             login_response.status_code = 502
             return login_response
 
         if response.status_code != 200:
             fallback = "Google authentication failed"
-            if response.status_code == 502:
+            if response.status_code in (502, 503, 504):
                 fallback = (
-                    "Login server unavailable (502). In Render: open login_server logs, "
-                    "set DATABASE_URL and JWT_PRIVATE_KEY, then redeploy."
+                    "Login server was unavailable (may be waking up on Render free tier). "
+                    "Wait 30 seconds and try Google sign-in again. "
+                    "If it keeps failing: check login_server logs, DATABASE_URL, and JWT_PRIVATE_KEY."
                 )
             elif response.status_code == 503:
                 fallback = (
