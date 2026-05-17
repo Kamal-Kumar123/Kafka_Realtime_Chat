@@ -125,6 +125,8 @@ def get_error_message(response: requests.Response, fallback: str) -> str:
             return detail[0].get("msg", fallback)
     except Exception:
         pass
+    if response.status_code:
+        return f"{fallback} (server returned {response.status_code})"
     return fallback
 
 
@@ -285,17 +287,25 @@ async def google_callback(request: Request):
             login_response.status_code = 400
             return login_response
 
-        response = requests.post(
-            f"{LOGIN_SERVER_URL}/auth/google",
-            json={
-                "email": user_info.get("email"),
-                "name": user_info.get("name"),
-                "first_name": user_info.get("given_name"),
-                "last_name": user_info.get("family_name"),
-                "google_sub": user_info.get("sub"),
-            },
-            timeout=15,
-        )
+        try:
+            response = requests.post(
+                f"{LOGIN_SERVER_URL}/auth/google",
+                json={
+                    "email": user_info.get("email"),
+                    "name": user_info.get("name"),
+                    "first_name": user_info.get("given_name"),
+                    "last_name": user_info.get("family_name"),
+                    "google_sub": user_info.get("sub"),
+                },
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            login_response = render_login(
+                request,
+                f"Could not reach login server at {LOGIN_SERVER_URL}. Check LOGIN_SERVER_URL on Render. ({e})",
+            )
+            login_response.status_code = 502
+            return login_response
 
         if response.status_code != 200:
             login_response = render_login(
