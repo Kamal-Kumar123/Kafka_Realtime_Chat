@@ -1,3 +1,4 @@
+
 FROM python:3.11
 
 WORKDIR /code
@@ -8,4 +9,7 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 COPY ./app /code/app
 
-CMD ["fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "80"]
+ENV PORT=10000
+EXPOSE 10000
+
+CMD ["sh", "-c", "fastapi run app/main.py --host 0.0.0.0 --port ${PORT}"]

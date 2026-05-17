@@ -18,7 +18,13 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, ValidationError
 import logging
 
-from .jwt_auth import ACCESS_TOKEN_EXPIRATION, oauth2_scheme, create_access_token, get_username_from_token
+from .jwt_auth import (
+    ACCESS_TOKEN_EXPIRATION,
+    oauth2_scheme,
+    create_access_token,
+    get_username_from_token,
+    jwt_keys_ready,
+)
 from .database import SessionDep, engine
 from .models import User
 
@@ -235,36 +241,73 @@ async def create_user(request: Request, session: SessionDep):
 
 @app.post("/auth/google", response_model=Token)
 def google_login(google_request: GoogleAuthRequest, session: SessionDep):
-    email = google_request.email.lower().strip()
-    if not is_valid_email(email):
-        raise HTTPException(status_code=400, detail="Google account did not return a valid email")
-
-    user = get_user_by_email(session, email)
-    if not user:
-        first_name = (google_request.first_name or "").strip()
-        last_name = (google_request.last_name or "").strip()
-
-        if not first_name and google_request.name:
-            name_parts = google_request.name.strip().split(" ", 1)
-            first_name = name_parts[0]
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
-
-        user = User(
-            username=build_username_from_email(email, session),
-            first_name=first_name or "Google",
-            last_name=last_name or "User",
-            email=email,
-            password_hash=get_password_hash(secrets.token_urlsafe(32)),
+    if not jwt_keys_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "JWT keys missing on login_server. On Render, set JWT_PRIVATE_KEY and "
+                "JWT_PUBLIC_KEY (paste PEM contents from auxiliar/keys)."
+            ),
         )
-        session.add(user)
-        session.commit()
-        session.refresh(user)
 
-    return create_access_token_for_user(user)
+    try:
+        email = google_request.email.lower().strip()
+        if not is_valid_email(email):
+            raise HTTPException(
+                status_code=400, detail="Google account did not return a valid email"
+            )
+
+        user = get_user_by_email(session, email)
+        if not user:
+            first_name = (google_request.first_name or "").strip()
+            last_name = (google_request.last_name or "").strip()
+
+            if not first_name and google_request.name:
+                name_parts = google_request.name.strip().split(" ", 1)
+                first_name = name_parts[0]
+                last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+            user = User(
+                username=build_username_from_email(email, session),
+                first_name=first_name or "Google",
+                last_name=last_name or "User",
+                email=email,
+                password_hash=get_password_hash(secrets.token_urlsafe(32)),
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+
+        return create_access_token_for_user(user)
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("Google auth failed: %s", error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Google sign-in failed on server: {error}",
+        ) from error
 
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+@app.get("/health")
+def health(session: SessionDep):
+    """Use this on Render to verify DB + JWT keys before Google login."""
+    db_ok = False
+    try:
+        session.exec(select(User).limit(1)).first()
+        db_ok = True
+    except Exception as error:
+        logger.error("Health DB check failed: %s", error)
+
+    return {
+        "status": "ok" if db_ok and jwt_keys_ready() else "degraded",
+        "database": db_ok,
+        "jwt_keys": jwt_keys_ready(),
+    }
 
 
 @app.get("/users/me", response_model=UserPublic)

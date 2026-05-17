@@ -308,9 +308,20 @@ async def google_callback(request: Request):
             return login_response
 
         if response.status_code != 200:
+            fallback = "Google authentication failed"
+            if response.status_code == 502:
+                fallback = (
+                    "Login server unavailable (502). In Render: open login_server logs, "
+                    "set DATABASE_URL and JWT_PRIVATE_KEY, then redeploy."
+                )
+            elif response.status_code == 503:
+                fallback = (
+                    "Login server not ready (503). Set JWT_PRIVATE_KEY and JWT_PUBLIC_KEY "
+                    "on the login_server service in Render."
+                )
             login_response = render_login(
                 request,
-                get_error_message(response, "Google authentication failed"),
+                get_error_message(response, fallback),
             )
             login_response.status_code = 401
             return login_response
