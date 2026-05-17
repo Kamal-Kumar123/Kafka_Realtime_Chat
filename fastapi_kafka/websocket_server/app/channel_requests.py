@@ -59,6 +59,22 @@ async def _send_json(websocket: WebSocket, payload: dict) -> None:
     await websocket.send_text(json.dumps(payload))
 
 
+_DUPLICATE_CHANNEL_MESSAGE = (
+    "This channel name is already taken. Please choose another name."
+)
+
+
+def _is_duplicate_channel_error(status: int, detail: str) -> bool:
+    if status != 400:
+        return False
+    lowered = detail.lower()
+    return (
+        detail == "duplicate_channel"
+        or "already taken" in lowered
+        or "already exists" in lowered
+    )
+
+
 async def _proxy_request(
     websocket: WebSocket,
     session: aiohttp.ClientSession,
@@ -77,6 +93,15 @@ async def _proxy_request(
         ) as response:
             if response.status >= 400:
                 detail = await _response_error_message(response)
+                if _is_duplicate_channel_error(response.status, detail):
+                    await _send_json(
+                        websocket,
+                        {
+                            "error": "duplicate_channel",
+                            "message": _DUPLICATE_CHANNEL_MESSAGE,
+                        },
+                    )
+                    return
                 await _send_json(websocket, {"error": f"{error_prefix}: {detail}"})
                 return
             result = await response.json()

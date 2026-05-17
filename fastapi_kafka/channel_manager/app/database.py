@@ -66,7 +66,7 @@ def create_channel(channel_name: str, description: str, session: SessionDep) -> 
         return channel
     except IntegrityError:
         session.rollback()
-        raise ValueError(f'A channel named "{name}" already exists') from None
+        raise ValueError("duplicate_channel") from None
 
 
 def join_channel(channel_id: int, username: str, session: Session) -> UserChannels:

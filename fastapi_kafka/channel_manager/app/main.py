@@ -89,6 +89,11 @@ def create_channel_endpoint(new_channel: CreateChannelRequest, session: SessionD
         channel = create_channel(new_channel.channel_name, new_channel.channel_description, session)
         return channel
     except ValueError as error:
+        if str(error) == "duplicate_channel":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This channel name is already taken. Please choose another name.",
+            )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
     except Exception as error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error))

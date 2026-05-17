@@ -113,6 +113,24 @@
     const searchChannelInput = document.getElementById('search-channel');
     const searchButton = document.getElementById('search-button');
     
+    const DUPLICATE_CHANNEL_MESSAGE =
+        "This channel name is already taken. Please choose another name.";
+
+    function showChannelError(data) {
+        if (data.error === "duplicate_channel") {
+            alert(data.message || DUPLICATE_CHANNEL_MESSAGE);
+            return;
+        }
+
+        const raw = String(data.error || "");
+        if (/already taken|already exists|duplicate/i.test(raw)) {
+            alert(DUPLICATE_CHANNEL_MESSAGE);
+            return;
+        }
+
+        alert(raw.replace(/^Failed to create channel:\s*/i, "").trim() || "Something went wrong. Please try again.");
+    }
+
     // Connect to WebSocket with JWT token
     function connectWebSocket() {
         // Construct WebSocket URL with token as query parameter
@@ -141,7 +159,7 @@
             
             // Handle response based on the data structure and request type
             if (data.error) {
-                alert(`Error: ${data.error}`);
+                showChannelError(data);
                 return;
             }
             
