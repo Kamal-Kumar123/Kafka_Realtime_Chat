@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 COPY ./app /code/app
 
 ENV PORT=10000
+ENV PYTHONPATH=/code/app
 EXPOSE 10000
 
-CMD ["sh", "-c", "fastapi run app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "fastapi run /code/app/main.py --host 0.0.0.0 --port ${PORT}"]

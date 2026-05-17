@@ -12,26 +12,15 @@ from typing import Annotated, Any, Optional, Dict
 import os
 
 import requests
-try:
-    from .service_warmup import (
-        CHANNEL_MANAGER_URL,
-        LOGIN_SERVER_URL,
-        WARMUP_WEBSOCKET_URL,
-        _login_server_url,
-        start_background_warmup,
-        warmup_status_response,
-        wake_service,
-    )
-except ImportError:
-    from service_warmup import (
-        CHANNEL_MANAGER_URL,
-        LOGIN_SERVER_URL,
-        WARMUP_WEBSOCKET_URL,
-        _login_server_url,
-        start_background_warmup,
-        warmup_status_response,
-        wake_service,
-    )
+from service_warmup import (
+    CHANNEL_MANAGER_URL,
+    LOGIN_SERVER_URL,
+    WARMUP_WEBSOCKET_URL,
+    _login_server_url,
+    start_background_warmup,
+    warmup_status_response,
+    wake_service,
+)
 from fastapi import FastAPI, Request, Form, Cookie, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
