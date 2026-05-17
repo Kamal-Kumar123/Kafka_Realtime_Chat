@@ -1,57 +1,67 @@
-# Keep Render Services Awake (Option A — UptimeRobot)
+# Keep services awake on Render
 
-On Render **free tier**, services sleep after ~15 minutes without traffic.  
-Use **UptimeRobot** to ping `/health` every **10 minutes** so your **resume link** stays reliable.
+## Built-in warmup (in your codebase — no UptimeRobot required)
 
-## URLs to monitor
+When anyone opens the **login page**, your app automatically wakes:
 
-Replace with your real Render hostnames:
+| Service | How |
+|---------|-----|
+| `login_server` | `GET /health` |
+| `channel_manager` | `GET /health` |
+| `websocket_server` | `GET /health` |
 
-| Monitor name      | URL |
-|-------------------|-----|
-| web_client        | `https://realtimechat-web-client.onrender.com/health` |
-| login_server      | `https://realtimechat-login-server.onrender.com/health` |
-| channel_manager   | `https://realtimechat-channel-manager.onrender.com/health` |
-| websocket_server  | `https://YOUR-websocket-service.onrender.com/health` |
+**Flow:**
 
-> Use the **public HTTPS URL** of each Web Service (not internal hostnames).
+1. Browser requests `/` → server starts warmup in a **background thread** immediately.
+2. Login page shows a spinner and calls **`/api/warmup`** until all services respond (up to ~90s).
+3. Login / Google buttons unlock when ready.
 
-## UptimeRobot setup (5 minutes)
-
-1. Create a free account at [https://uptimerobot.com](https://uptimerobot.com).
-2. Click **Add New Monitor**.
-3. For each URL above:
-   - **Monitor Type:** HTTP(s)
-   - **URL:** paste the `/health` URL
-   - **Monitoring Interval:** 5 minutes (free plan allows 5 min; use the shortest available)
-4. Save all monitors.
-
-Optional: enable email alerts so you know if a service is down.
-
-## web_client environment (Option C — automatic warmup)
-
-On **web_client** in Render → **Environment**, set:
+### Required env vars on **web_client** (Render)
 
 ```env
-LOGIN_SERVER_URL=https://realtimechat-login-server.onrender.com
+LOGIN_SERVER_URL=https://YOUR-login-server.onrender.com
 CHANNEL_MANAGER_URL=https://realtimechat-channel-manager.onrender.com
-WARMUP_WEBSOCKET_URL=https://YOUR-websocket-service.onrender.com
+WARMUP_WEBSOCKET_URL=https://YOUR-websocket-server.onrender.com
 ```
 
-When a visitor opens the login page, the app calls `/api/warmup` and waits for backends to wake **before** enabling Login / Google.
+Or set `WEBSOCKET_CLIENT_URL` to your public `wss://...onrender.com/ws` URL (warmup derives the host).
 
-## Recommended combo
+Redeploy **web_client** after setting these.
 
-| Layer | What it does |
-|-------|----------------|
-| **UptimeRobot** | Keeps services warm 24/7 (best for resume link) |
-| **Login warmup** | Handles cold start if a service still slept |
-| **Retries** | Google login retries 502/503 automatically |
+### Verify
 
-## Verify
+Open: `https://YOUR-web-client.onrender.com/api/warmup`
 
-Open each URL in a browser — you should see JSON like `{"status":"ok",...}`:
+Example when ready:
 
-- `.../health` on every service
+```json
+{
+  "ready": true,
+  "services": {
+    "login_server": true,
+    "channel_manager": true,
+    "websocket_server": true
+  }
+}
+```
 
-Then open your app: `https://realtimechat-web-client.onrender.com/`
+---
+
+## Optional: UptimeRobot (extra reliability for resume link)
+
+Built-in warmup helps **when someone visits**. UptimeRobot keeps services warm **between visitors** (no 60s wait).
+
+1. [https://uptimerobot.com](https://uptimerobot.com) → Add monitor every **5 minutes**:
+   - `https://YOUR-web-client.onrender.com/health`
+   - `https://YOUR-login-server.onrender.com/health`
+   - `https://realtimechat-channel-manager.onrender.com/health`
+   - `https://YOUR-websocket-server.onrender.com/health`
+
+---
+
+## Optional env tuning (web_client)
+
+```env
+WARMUP_MAX_SECONDS=90
+WARMUP_PING_TIMEOUT=15
+```

@@ -1,23 +1,36 @@
 /**
- * Wake sleeping Render services before login / channels (Option C).
- * Used on login.html and channels.html.
+ * Built-in Render cold-start warmup (no UptimeRobot required).
+ * Login page starts wake in background; this waits until backends respond.
  */
 async function runServiceWarmup(options = {}) {
     const {
         bannerId = null,
         warningId = null,
-        maxWaitMs = 65000,
+        maxWaitMs = 95000,
         onReady = null,
     } = options;
 
     const banner = bannerId ? document.getElementById(bannerId) : null;
     const warning = warningId ? document.getElementById(warningId) : null;
 
+    const setBannerText = (text) => {
+        if (banner) {
+            const label = banner.querySelector(".warmup-text") || banner;
+            if (label.classList && label.classList.contains("warmup-text")) {
+                label.textContent = text;
+            } else if (banner.childNodes.length > 1) {
+                banner.lastChild.textContent = " " + text;
+            }
+        }
+    };
+
     const hideBanner = () => {
         if (banner) {
             banner.classList.add("d-none");
         }
     };
+
+    setBannerText("Waking login, channel, and chat services…");
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), maxWaitMs);
@@ -27,13 +40,19 @@ async function runServiceWarmup(options = {}) {
         const data = await response.json();
         hideBanner();
 
-        if (!data.ready && warning) {
+        if (data.missing_env_on_web_client && data.missing_env_on_web_client.length && warning) {
+            warning.textContent =
+                "Missing on web_client Render env: " +
+                data.missing_env_on_web_client.join(", ") +
+                ". Set them and redeploy.";
+            warning.classList.remove("d-none");
+        } else if (!data.ready && warning) {
             const failed = Object.entries(data.services || {})
                 .filter(([, ok]) => !ok)
                 .map(([name]) => name)
                 .join(", ");
             warning.textContent = failed
-                ? `Some services are still waking (${failed}). Wait 30s and refresh.`
+                ? `Still waking: ${failed}. Wait 30s and refresh.`
                 : "Some services are still waking. Wait 30s and refresh.";
             warning.classList.remove("d-none");
         }
@@ -41,7 +60,7 @@ async function runServiceWarmup(options = {}) {
         hideBanner();
         if (warning) {
             warning.textContent =
-                "Warmup timed out. You can still try — wait 30s and refresh if login or chat fails.";
+                "Warmup timed out. Wait 30s, refresh the page, then try again.";
             warning.classList.remove("d-none");
         }
     } finally {
