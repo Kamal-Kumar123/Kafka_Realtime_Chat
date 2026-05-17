@@ -5,6 +5,8 @@
 #  Created by Xavier Cañadas on 28/4/2025
 #  Copyright (c) 2025. All rights reserved.
 
+from typing import Optional
+
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel
 
@@ -42,9 +44,9 @@ class ChannelRequest(BaseModel):
     It is used to handle channel-related operations like joining, creating, or getting channels information.
     """
     operation: int  # 0 = join, 1 = create, 2 = get_user_channels, 3 = get_by_name, 4 = channel history
-    channel_id: int = None
-    channel_name: str = None
-    description: str = None
+    channel_id: Optional[int] = None
+    channel_name: Optional[str] = None
+    description: Optional[str] = None
 
 class Request(BaseModel):
     """

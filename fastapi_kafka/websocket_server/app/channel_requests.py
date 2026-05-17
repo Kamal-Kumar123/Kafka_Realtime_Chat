@@ -6,11 +6,33 @@
 #  Copyright (c) 2025. All rights reserved.
 import json
 import os
+from urllib.parse import quote
 
 import aiohttp
 from fastapi import WebSocket
 
 from .models import ChannelRequest
+
+
+def _channel_manager_urls() -> dict[str, str]:
+    """
+    Build channel_manager API URLs from CHANNEL_MANAGER_URL.
+    Accepts either the service root or .../channels/ suffix.
+    """
+    raw = os.getenv("CHANNEL_MANAGER_URL", "http://channel_manager:80/channels/").strip()
+    raw = raw.rstrip("/")
+    if raw.endswith("/channels"):
+        base = raw[: -len("/channels")]
+    else:
+        base = raw
+
+    return {
+        "create": f"{base}/channels",
+        "join": f"{base}/channels/join",
+        "me": f"{base}/channels/me",
+        "messages": f"{base}/channels/messages",
+        "by_name": f"{base}/channels",
+    }
 
 
 async def _response_error_message(response: aiohttp.ClientResponse) -> str:
@@ -19,9 +41,18 @@ async def _response_error_message(response: aiohttp.ClientResponse) -> str:
         detail = body.get("detail")
         if isinstance(detail, str):
             return detail
+        if isinstance(detail, list) and detail:
+            first = detail[0]
+            if isinstance(first, dict):
+                loc = ".".join(str(part) for part in first.get("loc", ()))
+                msg = first.get("msg", "Invalid request")
+                return f"{loc}: {msg}" if loc else msg
     except Exception:
         pass
-    return f"Request failed (HTTP {response.status})"
+    text = (await response.text()).strip()
+    if text and len(text) < 300:
+        return text
+    return f"HTTP {response.status}"
 
 
 async def _send_json(websocket: WebSocket, payload: dict) -> None:
@@ -55,11 +86,7 @@ async def _proxy_request(
 
 
 async def send_channel_request(request_str: str, username: str, websocket: WebSocket):
-    channel_server_url = os.getenv(
-        "CHANNEL_MANAGER_URL", "http://channel_manager:80/channels/"
-    )
-    if not channel_server_url.endswith("/"):
-        channel_server_url += "/"
+    urls = _channel_manager_urls()
 
     try:
         data = json.loads(request_str)
@@ -67,11 +94,14 @@ async def send_channel_request(request_str: str, username: str, websocket: WebSo
 
         async with aiohttp.ClientSession() as session:
             if channel_request.operation == 0:
+                if not channel_request.channel_id:
+                    await _send_json(websocket, {"error": "Failed to join channel: channel_id is required"})
+                    return
                 await _proxy_request(
                     websocket,
                     session,
                     "POST",
-                    channel_server_url + "join",
+                    urls["join"],
                     json_body={
                         "channel_id": channel_request.channel_id,
                         "username": username,
@@ -80,14 +110,19 @@ async def send_channel_request(request_str: str, username: str, websocket: WebSo
                 )
 
             elif channel_request.operation == 1:
+                name = (channel_request.channel_name or "").strip()
+                if not name:
+                    await _send_json(websocket, {"error": "Failed to create channel: channel name is required"})
+                    return
                 await _proxy_request(
                     websocket,
                     session,
                     "POST",
-                    channel_server_url,
+                    urls["create"],
                     json_body={
-                        "channel_name": channel_request.channel_name,
-                        "channel_description": channel_request.description or "",
+                        "channel_name": name,
+                        "channel_description": (channel_request.description or "").strip()
+                        or "No description",
                     },
                     error_prefix="Failed to create channel",
                 )
@@ -97,25 +132,32 @@ async def send_channel_request(request_str: str, username: str, websocket: WebSo
                     websocket,
                     session,
                     "GET",
-                    channel_server_url + "me/" + username,
+                    f"{urls['me']}/{quote(username, safe='')}",
                     error_prefix="Failed to load your channels",
                 )
 
             elif channel_request.operation == 3:
+                search_name = (channel_request.channel_name or "").strip()
+                if not search_name:
+                    await _send_json(websocket, {"error": "Failed to search channels: enter a channel name"})
+                    return
                 await _proxy_request(
                     websocket,
                     session,
                     "GET",
-                    channel_server_url + channel_request.channel_name,
+                    f"{urls['by_name']}/{quote(search_name, safe='')}",
                     error_prefix="Failed to search channels",
                 )
 
             elif channel_request.operation == 4:
+                if not channel_request.channel_id:
+                    await _send_json(websocket, {"error": "Failed to load channel history: channel_id is required"})
+                    return
                 await _proxy_request(
                     websocket,
                     session,
                     "GET",
-                    channel_server_url + "messages/" + str(channel_request.channel_id),
+                    f"{urls['messages']}/{channel_request.channel_id}",
                     error_prefix="Failed to load channel history",
                 )
 

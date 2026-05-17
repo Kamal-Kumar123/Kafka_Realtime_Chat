@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     yield
     # shutdown
 
-app = FastAPI()
+app = FastAPI(redirect_slashes=False)
 
 @app.get("/")
 async def root():
@@ -63,8 +63,9 @@ def get_channel(channel_name: str, session: SessionDep):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# create a channel
+# create a channel (both paths — Render/clients may call with or without trailing slash)
 @app.post("/channels")
+@app.post("/channels/")
 def create_channel_endpoint(new_channel: CreateChannelRequest, session: SessionDep):
     """
     This endpoint creates a channel with the given channel_name and description.
