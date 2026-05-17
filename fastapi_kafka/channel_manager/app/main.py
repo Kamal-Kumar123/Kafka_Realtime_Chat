@@ -75,6 +75,8 @@ def create_channel_endpoint(new_channel: CreateChannelRequest, session: SessionD
     try:
         channel = create_channel(new_channel.channel_name, new_channel.channel_description, session)
         return channel
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
     except Exception as error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error))
 
@@ -88,7 +90,9 @@ def join_channel_endpoint(join_channel_req: JoinChannelRequest, session: Session
     """
     try:
         user_channel = join_channel(join_channel_req.channel_id, join_channel_req.username, session)
-        return {"status": "success", "channel_id": user_channel}
+        return {"status": "success", "channel_id": user_channel.channel_id}
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
     except Exception as error:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error))
 

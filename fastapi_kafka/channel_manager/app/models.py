@@ -43,6 +43,18 @@ class MessageCollection(BaseModel):
     """
     messages: List[Message] = Field(...)
 
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+    __table_args__ = {"schema": "public"}
+
+    username: str = Field(primary_key=True)
+    first_name: str
+    last_name: str
+    email: str
+    password_hash: str | None = None
+    disabled: bool = Field(default=False)
+
+
 class Channel(SQLModel, table=True):
     __tablename__ = "channels"
     __table_args__ = {"schema": "public"}
