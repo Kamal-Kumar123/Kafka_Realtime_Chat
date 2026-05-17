@@ -116,19 +116,50 @@
     const DUPLICATE_CHANNEL_MESSAGE =
         "This channel name is already taken. Please choose another name.";
 
+    let pendingCreateRequest = null;
+    let lastChannelOperation = null;
+
+    function showDuplicateChannelAlert() {
+        alert(DUPLICATE_CHANNEL_MESSAGE);
+    }
+
     function showChannelError(data) {
         if (data.error === "duplicate_channel") {
-            alert(data.message || DUPLICATE_CHANNEL_MESSAGE);
+            showDuplicateChannelAlert();
+            lastChannelOperation = null;
             return;
         }
 
         const raw = String(data.error || "");
+        const wasCreating = lastChannelOperation === "create";
+        lastChannelOperation = null;
+
         if (/already taken|already exists|duplicate/i.test(raw)) {
-            alert(DUPLICATE_CHANNEL_MESSAGE);
+            showDuplicateChannelAlert();
             return;
         }
 
-        alert(raw.replace(/^Failed to create channel:\s*/i, "").trim() || "Something went wrong. Please try again.");
+        if (wasCreating && (
+            /400,\s*message=['"]Bad Request/i.test(raw) ||
+            /failed to create channel:\s*400/i.test(raw) ||
+            /bad request/i.test(raw)
+        )) {
+            showDuplicateChannelAlert();
+            return;
+        }
+
+        const cleaned = raw
+            .replace(/^Error:\s*/i, "")
+            .replace(/^Failed to create channel:\s*/i, "")
+            .trim();
+        alert(cleaned || "Something went wrong. Please try again.");
+    }
+
+    function channelNameExists(channels, channelName) {
+        const target = channelName.toLowerCase();
+        return channels.some(
+            (ch) => ch.channel_name && ch.channel_name.toLowerCase() === target
+        );
     }
 
     // Connect to WebSocket with JWT token
@@ -165,6 +196,17 @@
             
             // Check if this is a channel list response
             if (Array.isArray(data)) {
+                if (pendingCreateRequest) {
+                    const pending = pendingCreateRequest;
+                    pendingCreateRequest = null;
+                    if (channelNameExists(data, pending.channelName)) {
+                        showDuplicateChannelAlert();
+                        return;
+                    }
+                    sendCreateChannelRequest(pending.channelName, pending.description);
+                    return;
+                }
+
                 // Check which request this response belongs to
                 if (searchChannelInput.dataset.searching === "true") {
                     // This is a response to search query
@@ -339,25 +381,44 @@
         }
     }
     
-    // Create new channel
+    // Check name is free, then create (shows friendly message if duplicate)
     function createChannel(channelName, description) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            const channelRequest = {
-                operation: 1,  // create
-                channel_name: channelName,
-                description: description || ""
-            };
-            
-            const request = {
-                type: 1,  // channel type request
-                data: JSON.stringify(channelRequest)
-            };
-            
-            console.log("Creating channel:", channelName);
-            console.log("Request:", request);
-            
-            socket.send(JSON.stringify(request));
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
         }
+
+        pendingCreateRequest = { channelName, description };
+        const channelRequest = {
+            operation: 3,  // get_by_name — check duplicate before create
+            channel_name: channelName
+        };
+        const request = {
+            type: 1,
+            data: JSON.stringify(channelRequest)
+        };
+
+        console.log("Checking channel name before create:", channelName);
+        socket.send(JSON.stringify(request));
+    }
+
+    function sendCreateChannelRequest(channelName, description) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+
+        lastChannelOperation = "create";
+        const channelRequest = {
+            operation: 1,  // create
+            channel_name: channelName,
+            description: description || ""
+        };
+        const request = {
+            type: 1,
+            data: JSON.stringify(channelRequest)
+        };
+
+        console.log("Creating channel:", channelName);
+        socket.send(JSON.stringify(request));
     }
     
     // Process channel creation response

@@ -27,7 +27,7 @@ def _channel_manager_urls() -> dict[str, str]:
         base = raw
 
     return {
-        "create": f"{base}/channels",
+        "create": f"{base}/channels/",
         "join": f"{base}/channels/join",
         "me": f"{base}/channels/me",
         "messages": f"{base}/channels/messages",
@@ -75,6 +75,16 @@ def _is_duplicate_channel_error(status: int, detail: str) -> bool:
     )
 
 
+def _is_create_channel_400(status: int, detail: str) -> bool:
+    """400 on create often means duplicate when the API body is empty or generic."""
+    if status != 400:
+        return False
+    if _is_duplicate_channel_error(status, detail):
+        return True
+    normalized = detail.strip().lower()
+    return normalized in ("", "http 400", "bad request") or "bad request" in normalized
+
+
 async def _proxy_request(
     websocket: WebSocket,
     session: aiohttp.ClientSession,
@@ -83,6 +93,7 @@ async def _proxy_request(
     *,
     json_body: dict | None = None,
     error_prefix: str,
+    duplicate_on_400: bool = False,
 ) -> None:
     try:
         async with session.request(
@@ -93,7 +104,10 @@ async def _proxy_request(
         ) as response:
             if response.status >= 400:
                 detail = await _response_error_message(response)
-                if _is_duplicate_channel_error(response.status, detail):
+                is_duplicate = _is_duplicate_channel_error(response.status, detail) or (
+                    duplicate_on_400 and _is_create_channel_400(response.status, detail)
+                )
+                if is_duplicate:
                     await _send_json(
                         websocket,
                         {
@@ -107,6 +121,16 @@ async def _proxy_request(
             result = await response.json()
             await _send_json(websocket, result)
     except aiohttp.ClientError as error:
+        error_text = str(error)
+        if duplicate_on_400 and "400" in error_text and "Bad Request" in error_text:
+            await _send_json(
+                websocket,
+                {
+                    "error": "duplicate_channel",
+                    "message": _DUPLICATE_CHANNEL_MESSAGE,
+                },
+            )
+            return
         await _send_json(websocket, {"error": f"{error_prefix}: {error}"})
 
 
@@ -150,6 +174,7 @@ async def send_channel_request(request_str: str, username: str, websocket: WebSo
                         or "No description",
                     },
                     error_prefix="Failed to create channel",
+                    duplicate_on_400=True,
                 )
 
             elif channel_request.operation == 2:
