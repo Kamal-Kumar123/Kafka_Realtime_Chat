@@ -273,9 +273,7 @@ async def google_callback(request: Request):
             login_response.status_code = 401
             return login_response
 
-        token = await oauth.google.authorize_access_token(
-            request, redirect_uri=GOOGLE_REDIRECT_URI
-        )
+        token = await oauth.google.authorize_access_token(request)
         user_info = token.get("userinfo")
         if not user_info:
             user_info = await oauth.google.userinfo(token=token)
